@@ -8,7 +8,7 @@ how millions of Indian students actually think and learn — in Hindi, Hinglish,
 or their regional language. This creates an accessibility gap where AI's benefits 
 don't reach the students who need them most.
 
-Our Solution:
+Solution:
 Bolo lets students ask any academic doubt and get it explained in their preferred 
 language — Hindi, Hinglish, or English — using simple words and relatable analogies, 
 just like a friendly teacher would explain it. Every doubt is automatically tagged 
