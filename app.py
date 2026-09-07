@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import io
+import uuid
 from datetime import datetime
 from openai import OpenAI
+from gtts import gTTS
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Bolo - AI Doubt Solver", page_icon="📚", layout="wide")
@@ -159,6 +162,12 @@ st.markdown("""
         box-shadow: 0 1px 0 #b8471a, 0 2px 8px rgba(255,106,43,0.25);
     }
 
+    /* Sidebar buttons - force black text so it's readable on the orange background */
+    section[data-testid="stSidebar"] .stButton > button {
+        color: #000000 !important;
+        font-weight: 700 !important;
+    }
+
     .stDataFrame {
         border-radius: 14px;
         overflow: hidden;
@@ -174,6 +183,20 @@ client = OpenAI(
 )
 
 DATA_FILE = "doubts_log.csv"
+CHATS_FILE = "chats.json"
+
+
+# ---------- CHAT PERSISTENCE (saves conversations to disk) ----------
+def load_chats_from_disk():
+    if os.path.exists(CHATS_FILE):
+        with open(CHATS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_chats_to_disk():
+    with open(CHATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(st.session_state.chats, f, ensure_ascii=False, indent=2)
 
 
 # ---------- DATA HANDLING ----------
@@ -196,15 +219,19 @@ def save_entry(question, language, subject, topic):
     df.to_csv(DATA_FILE, index=False)
 
 
-# ---------- AI CALL ----------
-def get_explanation(question, language):
-    prompt = f"""You are a friendly teacher explaining concepts to a student.
-Explain the following doubt in {language}, using simple words and one relatable analogy.
-Keep it under 150 words.
+# ---------- AI CALL (now conversation-aware) ----------
+def get_explanation(question, language, conversation_context=""):
+    prompt = f"""You are a friendly teacher having an ongoing conversation with a student.
+Explain things in {language}, using simple words and relatable analogies.
+Keep each answer under 150 words.
 
-Also return a JSON tag for the subject and specific topic.
+If there is previous conversation, use it to understand follow-up questions
+(e.g. "why?" or "give an example" refers back to what was just discussed).
 
-Doubt: {question}
+Previous conversation so far:
+{conversation_context if conversation_context else "(this is the first question)"}
+
+New question from the student: {question}
 
 Respond ONLY with valid JSON in this exact format, no extra text before or after:
 {{"explanation": "...", "subject": "...", "topic": "..."}}
@@ -222,6 +249,36 @@ Respond ONLY with valid JSON in this exact format, no extra text before or after
     except json.JSONDecodeError:
         data = {"explanation": raw, "subject": "Unknown", "topic": "Unknown"}
     return data
+
+
+# ---------- VOICE: SPEECH-TO-TEXT ----------
+def transcribe_audio(audio_bytes):
+    """Send recorded audio to Groq's Whisper model and get back the transcribed text."""
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "doubt.wav"
+    transcript = client.audio.transcriptions.create(
+        model="whisper-large-v3",
+        file=audio_file,
+    )
+    return transcript.text
+
+
+# ---------- VOICE: TEXT-TO-SPEECH ----------
+LANG_CODE_MAP = {
+    "Hindi": "hi",
+    "Hinglish": "hi",   # gTTS has no Hinglish voice; Hindi voice reads it naturally enough
+    "Kannada": "kn",
+    "Marathi": "mr",
+    "English": "en",
+}
+
+def text_to_speech(text, language):
+    lang_code = LANG_CODE_MAP.get(language, "en")
+    tts = gTTS(text=text, lang=lang_code)
+    audio_fp = io.BytesIO()
+    tts.write_to_fp(audio_fp)
+    audio_fp.seek(0)
+    return audio_fp
 
 
 # ---------- UI: HERO HEADER ----------
@@ -255,31 +312,135 @@ st.write("")
 
 tab1, tab2 = st.tabs(["✏️ Ask a Doubt", "📊 Dashboard"])
 
-# ---------- TAB 1: ASK A DOUBT ----------
+# ---------- MULTI-CHAT MEMORY SETUP (loaded from disk so it survives new windows) ----------
+if "chats" not in st.session_state:
+    st.session_state.chats = load_chats_from_disk()
+
+if "active_chat_id" not in st.session_state:
+    non_empty_chats = [cid for cid, c in st.session_state.chats.items() if c["messages"]]
+    if non_empty_chats:
+        st.session_state.active_chat_id = non_empty_chats[-1]  # open the most recent one
+    else:
+        new_id = str(uuid.uuid4())
+        st.session_state.chats[new_id] = {"title": "New Chat", "messages": []}
+        st.session_state.active_chat_id = new_id
+
+
+def start_new_chat():
+    new_id = str(uuid.uuid4())
+    st.session_state.chats[new_id] = {"title": "New Chat", "messages": []}
+    st.session_state.active_chat_id = new_id
+    save_chats_to_disk()
+
+
+def delete_chat(chat_id):
+    del st.session_state.chats[chat_id]
+    if st.session_state.active_chat_id == chat_id:
+        remaining = list(st.session_state.chats.keys())
+        if remaining:
+            st.session_state.active_chat_id = remaining[-1]
+        else:
+            start_new_chat()
+    save_chats_to_disk()
+
+
+# ---------- SIDEBAR: PAST CHATS ----------
+with st.sidebar:
+    st.markdown("### 💬 Your Conversations")
+    if st.button("➕ New Chat", use_container_width=True):
+        start_new_chat()
+        st.rerun()
+
+    st.write("")
+    # Show most recent chats first — skip empty conversations that never got a question
+    for chat_id in reversed(list(st.session_state.chats.keys())):
+        chat = st.session_state.chats[chat_id]
+        if not chat["messages"]:
+            continue
+        is_active = chat_id == st.session_state.active_chat_id
+        label = ("🟠 " if is_active else "") + chat["title"]
+
+        col_chat, col_del = st.columns([5, 1])
+        with col_chat:
+            if st.button(label, key=f"chat_btn_{chat_id}", use_container_width=True):
+                st.session_state.active_chat_id = chat_id
+                st.rerun()
+        with col_del:
+            if st.button("🗑️", key=f"del_btn_{chat_id}"):
+                delete_chat(chat_id)
+                st.rerun()
+
+# ---------- TAB 1: ASK A DOUBT (chat-style, supports follow-ups) ----------
 with tab1:
     st.write("")
-    col_left, col_right = st.columns([2, 1])
 
-    with col_left:
-        question = st.text_area(
-            "Your question",
-            placeholder="e.g. Why does ice float on water?",
-            height=120,
-        )
-    with col_right:
-        language = st.selectbox("Explain in:", ["Hindi", "Hinglish", "Kannada", "Marathi", "English"])
-        st.write("")
-        ask_clicked = st.button("Get Explanation", use_container_width=True)
+    active_chat = st.session_state.chats[st.session_state.active_chat_id]
 
-    if ask_clicked:
-        if question.strip() == "":
-            st.warning("Please type a question first.")
-        else:
-            with st.spinner("Thinking..."):
-                result = get_explanation(question, language)
-            st.success(result["explanation"])
-            st.caption(f"📌 Subject: {result['subject']} • Topic: {result['topic']}")
-            save_entry(question, language, result["subject"], result["topic"])
+    language = st.selectbox("Explain in:", ["Hindi", "Hinglish", "Kannada", "Marathi", "English"])
+
+    def build_context():
+        """Turn the last few messages into a text block the AI can read for follow-up context."""
+        recent = active_chat["messages"][-6:]  # last 6 messages is plenty of context
+        lines = []
+        for m in recent:
+            speaker = "Student" if m["role"] == "user" else "Teacher"
+            lines.append(f"{speaker}: {m['content']}")
+        return "\n".join(lines)
+
+    def handle_new_question(question_text):
+        active_chat["messages"].append({"role": "user", "content": question_text})
+
+        # Name the chat after the first question, so it's recognizable in the sidebar
+        if active_chat["title"] == "New Chat":
+            short_title = question_text.strip()[:40]
+            active_chat["title"] = short_title + ("..." if len(question_text.strip()) > 40 else "")
+
+        context = build_context()
+        with st.spinner("Thinking..."):
+            result = get_explanation(question_text, language, context)
+        active_chat["messages"].append({
+            "role": "assistant",
+            "content": result["explanation"],
+            "subject": result["subject"],
+            "topic": result["topic"],
+        })
+        save_entry(question_text, language, result["subject"], result["topic"])
+        save_chats_to_disk()
+
+    # Show the whole conversation so far
+    for i, msg in enumerate(active_chat["messages"]):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant":
+                st.caption(f"📌 Subject: {msg.get('subject', '')} • Topic: {msg.get('topic', '')}")
+                audio_key = f"audio_{st.session_state.active_chat_id}_{i}"
+                if st.button("🔊 Listen", key=f"listen_{audio_key}"):
+                    with st.spinner("Preparing audio..."):
+                        st.session_state[audio_key] = text_to_speech(msg["content"], language)
+                if audio_key in st.session_state:
+                    st.audio(st.session_state[audio_key], format="audio/mp3")
+
+    if not active_chat["messages"]:
+        st.info("This is a new conversation. Ask your first doubt below!")
+
+    # Voice input, tucked away so text stays the primary flow
+    with st.expander("🎤 Or record your doubt instead of typing"):
+        audio_value = st.audio_input("Record")
+        if audio_value is not None:
+            with st.spinner("Listening..."):
+                voice_text = transcribe_audio(audio_value.read())
+            st.markdown(f"**Heard:** {voice_text}")
+            if st.button("Send this question"):
+                handle_new_question(voice_text)
+                st.rerun()
+
+    # Chat-style text input - works for both the first question and any follow-up
+    user_input = st.chat_input("Ask a doubt, or ask a follow-up question...")
+    if user_input:
+        handle_new_question(user_input)
+        st.rerun()
+
+
 
 # ---------- TAB 2: DASHBOARD ----------
 with tab2:
