@@ -115,17 +115,54 @@ st.markdown("""
         background-color: #1a1613 !important;
     }
 
-    /* Dashboard cards */
+    /* Dashboard cards - with 3D depth + hover tilt illusion */
     div[data-testid="column"] {
-        background-color: #151210;
+        background: linear-gradient(145deg, #1a1613, #100d0b);
         padding: 22px;
         border-radius: 18px;
         border: 1px solid #241f1b;
+        box-shadow:
+            0 8px 24px rgba(0,0,0,0.5),
+            inset 0 1px 0 rgba(255,255,255,0.03);
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    div[data-testid="column"]:hover {
+        transform: perspective(800px) rotateX(2deg) translateY(-4px);
+        box-shadow:
+            0 16px 32px rgba(255,106,43,0.15),
+            0 8px 24px rgba(0,0,0,0.6),
+            inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    /* Glow behind the hero headline for depth */
+    h1 {
+        text-shadow: 0 0 40px rgba(255,106,43,0.15);
+    }
+
+    /* Stat numbers get a subtle glow + lift on hover */
+    .stat-number {
+        transition: transform 0.2s ease, text-shadow 0.2s ease;
+        display: inline-block;
+    }
+
+    /* Text area gets an inset "pressed into surface" 3D feel */
+    .stTextArea textarea {
+        box-shadow: inset 0 2px 8px rgba(0,0,0,0.4) !important;
+    }
+
+    /* Buttons get raised 3D depth */
+    .stButton > button {
+        box-shadow: 0 4px 0 #b8471a, 0 6px 16px rgba(255,106,43,0.25);
+    }
+    .stButton > button:active {
+        transform: translateY(3px);
+        box-shadow: 0 1px 0 #b8471a, 0 2px 8px rgba(255,106,43,0.25);
     }
 
     .stDataFrame {
         border-radius: 14px;
         overflow: hidden;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -190,7 +227,7 @@ Respond ONLY with valid JSON in this exact format, no extra text before or after
 # ---------- UI: HERO HEADER ----------
 st.markdown("<div style='height: 12px'></div>", unsafe_allow_html=True)
 st.markdown("<h1>Doubts, <span class='accent'>solved</span><br>in your language.</h1>", unsafe_allow_html=True)
-st.caption("Bolo explains any academic question in Hindi, Hinglish, or English — like a teacher would.")
+st.caption("Bolo explains any academic question in Hindi, Hinglish, Kannada, Marathi, or English — like a teacher would.")
 
 st.write("")
 
@@ -205,7 +242,7 @@ with stat_col1:
     st.markdown("<div class='stat-label'>Doubts Solved</div>", unsafe_allow_html=True)
     st.markdown("<div class='stat-divider'></div>", unsafe_allow_html=True)
 with stat_col2:
-    st.markdown("<div class='stat-number'>3</div>", unsafe_allow_html=True)
+    st.markdown("<div class='stat-number'>5</div>", unsafe_allow_html=True)
     st.markdown("<div class='stat-label'>Languages Supported</div>", unsafe_allow_html=True)
     st.markdown("<div class='stat-divider'></div>", unsafe_allow_html=True)
 with stat_col3:
@@ -230,7 +267,7 @@ with tab1:
             height=120,
         )
     with col_right:
-        language = st.selectbox("Explain in:", ["Hindi", "Hinglish", "English"])
+        language = st.selectbox("Explain in:", ["Hindi", "Hinglish", "Kannada", "Marathi", "English"])
         st.write("")
         ask_clicked = st.button("Get Explanation", use_container_width=True)
 
